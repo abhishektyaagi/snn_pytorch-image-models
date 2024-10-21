@@ -14,12 +14,14 @@ NVIDIA CUDA specific speedups adopted from NVIDIA Apex examples
 
 Hacked together by / Copyright 2020 Ross Wightman (https://github.com/rwightman)
 """
+import pdb
 import argparse
 import importlib
 import json
 import logging
 import os
 import time
+import math
 from collections import OrderedDict
 from contextlib import suppress
 from datetime import datetime
@@ -39,6 +41,9 @@ from timm.models import create_model, safe_model_name, resume_checkpoint, load_c
 from timm.optim import create_optimizer_v2, optimizer_kwargs
 from timm.scheduler import create_scheduler_v2, scheduler_kwargs
 from timm.utils import ApexScaler, NativeScaler
+from torch.utils.checkpoint import checkpoint
+from timm.customFCGoogleSlow import CustomFullyConnectedLayer as customLinear
+#from timm.customFCGoogleWhereSlow import CustomFullyConnectedLayer as customLinear
 
 try:
     from apex import amp
@@ -389,7 +394,8 @@ group.add_argument('--use-multi-epochs-loader', action='store_true', default=Fal
                    help='use the multi-epochs-loader to save time at the beginning of every epoch')
 group.add_argument('--log-wandb', action='store_true', default=False,
                    help='log training and validation metrics to wandb')
-
+group.add_argument('--sparsity', type=float, default=0.1,
+                   help='Sparsity of each layer (default: 0.0)')
 
 def _parse_args():
     # Do we have a config file to parse?
@@ -467,6 +473,15 @@ def main():
             num_classes=-1,  # force head adaptation
         )
 
+    def update_custom_linear_lr(epoch, num_epochs, initial_lr=0.05, final_lr=0.0001):
+        """Calculate new alpha learning rate using cosine annealing."""
+        new_alpha_lr = final_lr + (initial_lr - final_lr) * 0.5 * (1 + math.cos(math.pi * epoch / num_epochs))
+    
+        # Iterate through the model's layers and update alpha_lr for customLinear layers
+        for layer in model.modules():
+            if isinstance(layer, customLinear):
+                layer.update_alpha_lr(new_alpha_lr)
+
     model = create_model(
         args.model,
         pretrained=args.pretrained,
@@ -480,9 +495,23 @@ def main():
         bn_eps=args.bn_eps,
         scriptable=args.torchscript,
         checkpoint_path=args.initial_checkpoint,
+        sparsity=args.sparsity,
         **factory_kwargs,
         **args.model_kwargs,
     )
+
+    def memory_hook(module, input, output):
+        memory_allocated = torch.cuda.memory_allocated() / (1024 ** 2)  # Convert to MB
+        memory_reserved = torch.cuda.memory_reserved() / (1024 ** 2)  # Convert to MB
+        print(f"Layer: {module.__class__.__name__}, Memory Allocated: {memory_allocated:.2f} MB, Memory Reserved: {memory_reserved:.2f} MB")
+
+    def add_memory_hooks(model):
+        for layer in model.children():
+            layer.register_forward_hook(memory_hook)
+
+    #add_memory_hooks(model)
+    print("Model Loaded!")
+    #pdb.set_trace()
     if args.head_init_scale is not None:
         with torch.no_grad():
             model.get_classifier().weight.mul_(args.head_init_scale)
@@ -515,10 +544,21 @@ def main():
         model = convert_splitbn_model(model, max(num_aug_splits, 2))
 
     # move model to GPU, enable channels last layout if set
+    
+    print("Moving model to device")
     model.to(device=device)
+    #pdb.set_trace()
     if args.channels_last:
         model.to(memory_format=torch.channels_last)
+    
+    print(f"Memory Allocated before summary: {torch.cuda.memory_allocated() / (1024 ** 2)} MB")
+    print(f"Memory Reserved before summary: {torch.cuda.memory_reserved() / (1024 ** 2)} MB")
 
+    from torchsummary import summary
+    #summary(model, input_size=(3, 224, 224),depth=3)
+    
+    print(f"Memory Allocated after summary: {torch.cuda.memory_allocated() / (1024 ** 2)} MB")
+    print(f"Memory Reserved after summary: {torch.cuda.memory_reserved() / (1024 ** 2)} MB")
     # setup synchronized BatchNorm for distributed training
     if args.distributed and args.sync_bn:
         args.dist_bn = ''  # disable dist_bn when sync BN active
@@ -554,12 +594,14 @@ def main():
                 f'Learning rate ({args.lr}) calculated from base learning rate ({args.lr_base}) '
                 f'and effective global batch size ({global_batch_size}) with {args.lr_base_scale} scaling.')
 
+    print("Creating optimizer")
     optimizer = create_optimizer_v2(
         model,
         **optimizer_kwargs(cfg=args),
         **args.opt_kwargs,
     )
 
+    print("Seting up automatic mixed precision")
     # setup automatic mixed-precision (AMP) loss scaling and op casting
     amp_autocast = suppress  # do nothing
     loss_scaler = None
@@ -610,7 +652,8 @@ def main():
             load_checkpoint(model_ema.module, args.resume, use_ema=True)
         if args.torchcompile:
             model_ema = torch.compile(model_ema, backend=args.torchcompile)
-
+    
+    print("Setting up distributed data parallel")
     # setup distributed training
     if args.distributed:
         if has_apex and use_amp == 'apex':
@@ -636,7 +679,7 @@ def main():
         input_img_mode = 'RGB' if data_config['input_size'][0] == 3 else 'L'
     else:
         input_img_mode = args.input_img_mode
-
+    print("Creating dataset")
     dataset_train = create_dataset(
         args.dataset,
         root=args.data_dir,
@@ -668,6 +711,7 @@ def main():
             num_samples=args.val_num_samples,
         )
 
+    print("Creating mixup / cutmix")
     # setup mixup / cutmix
     collate_fn = None
     mixup_fn = None
@@ -693,6 +737,7 @@ def main():
     if num_aug_splits > 1:
         dataset_train = AugMixDataset(dataset_train, num_splits=num_aug_splits)
 
+    print("Creating data loaders with augmentation pipeline")
     # create data loaders w/ augmentation pipeline
     train_interpolation = args.train_interpolation
     if args.no_aug or not train_interpolation:
@@ -754,6 +799,7 @@ def main():
             use_prefetcher=args.prefetcher,
         )
 
+    print( "Creating learning rate scheduler")
     # setup loss function
     if args.jsd_loss:
         assert num_aug_splits > 1  # JSD only valid with aug splits set
@@ -822,6 +868,7 @@ def main():
                 "You've requested to log metrics to wandb but package not found. "
                 "Metrics not being logged to wandb, try `pip install wandb`")
 
+    print("Setting up learning rate scheduler")
     # setup learning rate schedule and starting epoch
     updates_per_epoch = (len(loader_train) + args.grad_accum_steps - 1) // args.grad_accum_steps
     lr_scheduler, num_epochs = create_scheduler_v2(
@@ -846,6 +893,7 @@ def main():
             f'Scheduled epochs: {num_epochs}. LR stepped per {"epoch" if lr_scheduler.t_in_epochs else "update"}.')
 
     results = []
+    print("Starting training loop")
     try:
         for epoch in range(start_epoch, num_epochs):
             if hasattr(dataset_train, 'set_epoch'):
@@ -853,6 +901,7 @@ def main():
             elif args.distributed and hasattr(loader_train.sampler, 'set_epoch'):
                 loader_train.sampler.set_epoch(epoch)
 
+            print(f"Epoch {epoch} starting")
             train_metrics = train_one_epoch(
                 epoch,
                 model,
@@ -927,6 +976,8 @@ def main():
                 # step LR for next epoch
                 lr_scheduler.step(epoch + 1, latest_metric)
 
+            update_custom_linear_lr(epoch, num_epochs)
+
             results.append({
                 'epoch': epoch,
                 'train': train_metrics,
@@ -960,6 +1011,7 @@ def train_one_epoch(
         mixup_fn=None,
         num_updates_total=None,
 ):
+
     if args.mixup_off_epoch and epoch >= args.mixup_off_epoch:
         if args.prefetcher and loader.mixup_enabled:
             loader.mixup_enabled = False
@@ -972,8 +1024,9 @@ def train_one_epoch(
     data_time_m = utils.AverageMeter()
     losses_m = utils.AverageMeter()
 
+    print("Setting model to train")
     model.train()
-
+    #pdb.set_trace()
     accum_steps = args.grad_accum_steps
     last_accum_steps = len(loader) % accum_steps
     updates_per_epoch = (len(loader) + accum_steps - 1) // accum_steps

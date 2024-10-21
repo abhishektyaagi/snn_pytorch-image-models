@@ -44,6 +44,7 @@ def create_model(
         scriptable: Optional[bool] = None,
         exportable: Optional[bool] = None,
         no_jit: Optional[bool] = None,
+        sparsity: Optional[float] = 0.1,
         **kwargs,
 ):
     """Create a model.
@@ -111,6 +112,8 @@ def create_model(
 
     if not is_model(model_name):
         raise RuntimeError('Unknown model (%s)' % model_name)
+
+    kwargs['sparsity'] = sparsity
 
     create_fn = model_entrypoint(model_name)
     with set_layer_config(scriptable=scriptable, exportable=exportable, no_jit=no_jit):

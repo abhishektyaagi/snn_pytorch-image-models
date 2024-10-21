@@ -26,6 +26,7 @@ Hacked together by / Copyright 2020, Ross Wightman
 import logging
 import math
 from collections import OrderedDict
+import pdb
 from functools import partial
 from typing import Any, Callable, Dict, Optional, Set, Tuple, Type, Union, List
 try:
@@ -44,10 +45,14 @@ from timm.data import IMAGENET_DEFAULT_MEAN, IMAGENET_DEFAULT_STD, IMAGENET_INCE
 from timm.layers import PatchEmbed, Mlp, DropPath, AttentionPoolLatent, RmsNorm, PatchDropout, SwiGLUPacked, \
     trunc_normal_, lecun_normal_, resample_patch_embed, resample_abs_pos_embed, use_fused_attn, \
     get_act_layer, get_norm_layer, LayerType
+from timm.layers.mlp import MlpCustomLinear
 from ._builder import build_model_with_cfg
 from ._features import feature_take_indices
 from ._manipulate import named_apply, checkpoint_seq, adapt_input_conv
 from ._registry import generate_default_cfgs, register_model, register_model_deprecations
+#from timm.customFCGoogleSlowParallel import CustomFullyConnectedLayer as customLinear
+from timm.customFCGoogleSlow import CustomFullyConnectedLayer as customLinear
+#from timm.customFCGoogleWhereSlow import CustomFullyConnectedLayer as customLinear
 
 __all__ = ['VisionTransformer']  # model_registry will add each entrypoint fn to this
 
@@ -67,6 +72,7 @@ class Attention(nn.Module):
             attn_drop: float = 0.,
             proj_drop: float = 0.,
             norm_layer: nn.Module = nn.LayerNorm,
+            sparsity: Optional[float] = 0.1,
     ) -> None:
         super().__init__()
         assert dim % num_heads == 0, 'dim should be divisible by num_heads'
@@ -75,11 +81,18 @@ class Attention(nn.Module):
         self.scale = self.head_dim ** -0.5
         self.fused_attn = use_fused_attn()
 
-        self.qkv = nn.Linear(dim, dim * 3, bias=qkv_bias)
+        #self.qkv = nn.Linear(dim, dim * 3, bias=qkv_bias)
+        self.qkv = customLinear(dim,dim*3,sparsity=sparsity)
+        #print(dim)
+
         self.q_norm = norm_layer(self.head_dim) if qk_norm else nn.Identity()
         self.k_norm = norm_layer(self.head_dim) if qk_norm else nn.Identity()
+        
         self.attn_drop = nn.Dropout(attn_drop)
-        self.proj = nn.Linear(dim, dim)
+        
+        #self.proj = nn.Linear(dim, dim)
+        self.proj = customLinear(dim,dim,sparsity=sparsity)
+        
         self.proj_drop = nn.Dropout(proj_drop)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -135,7 +148,9 @@ class Block(nn.Module):
             drop_path: float = 0.,
             act_layer: nn.Module = nn.GELU,
             norm_layer: nn.Module = nn.LayerNorm,
-            mlp_layer: nn.Module = Mlp,
+            #mlp_layer: nn.Module = Mlp,
+            mlp_layer: nn.Module = MlpCustomLinear,
+            sparsity: Optional[float] = 0.1,
     ) -> None:
         super().__init__()
         self.norm1 = norm_layer(dim)
@@ -147,6 +162,7 @@ class Block(nn.Module):
             attn_drop=attn_drop,
             proj_drop=proj_drop,
             norm_layer=norm_layer,
+            sparsity=sparsity,
         )
         self.ls1 = LayerScale(dim, init_values=init_values) if init_values else nn.Identity()
         self.drop_path1 = DropPath(drop_path) if drop_path > 0. else nn.Identity()
@@ -157,6 +173,7 @@ class Block(nn.Module):
             hidden_features=int(dim * mlp_ratio),
             act_layer=act_layer,
             drop=proj_drop,
+            sparsity=sparsity,
         )
         self.ls2 = LayerScale(dim, init_values=init_values) if init_values else nn.Identity()
         self.drop_path2 = DropPath(drop_path) if drop_path > 0. else nn.Identity()
@@ -453,7 +470,9 @@ class VisionTransformer(nn.Module):
             norm_layer: Optional[LayerType] = None,
             act_layer: Optional[LayerType] = None,
             block_fn: Type[nn.Module] = Block,
-            mlp_layer: Type[nn.Module] = Mlp,
+            #mlp_layer: Type[nn.Module] = Mlp,
+            mlp_layer: Type[nn.Module] = MlpCustomLinear,
+            sparsity: Optional[float] = 0.1,
     ) -> None:
         """
         Args:
@@ -483,6 +502,7 @@ class VisionTransformer(nn.Module):
             act_layer: MLP activation layer.
             block_fn: Transformer block layer.
         """
+        
         super().__init__()
         assert global_pool in ('', 'avg', 'avgmax', 'max', 'token', 'map')
         assert class_token or global_pool != 'token'
@@ -501,6 +521,9 @@ class VisionTransformer(nn.Module):
         self.no_embed_class = no_embed_class  # don't embed prefix positions (includes reg)
         self.dynamic_img_size = dynamic_img_size
         self.grad_checkpointing = False
+        self.sparsity = sparsity
+
+        #pdb.set_trace()
 
         embed_args = {}
         if dynamic_img_size:
@@ -550,6 +573,7 @@ class VisionTransformer(nn.Module):
                 norm_layer=norm_layer,
                 act_layer=act_layer,
                 mlp_layer=mlp_layer,
+                sparsity=sparsity,
             )
             for i in range(depth)])
         self.feature_info = [
@@ -558,6 +582,11 @@ class VisionTransformer(nn.Module):
 
         # Classifier Head
         if global_pool == 'map':
+            print("CHANGE THE LINEAR LAYERS TO CUSTOM LINEAR LAYERS")
+            
+            #Have an always executing assert statement
+            assert False, "Change the linear layers to custom linear layers"    
+            
             self.attn_pool = AttentionPoolLatent(
                 self.embed_dim,
                 num_heads=num_heads,
@@ -568,6 +597,7 @@ class VisionTransformer(nn.Module):
             self.attn_pool = None
         self.fc_norm = norm_layer(embed_dim) if use_fc_norm else nn.Identity()
         self.head_drop = nn.Dropout(drop_rate)
+        
         self.head = nn.Linear(self.embed_dim, num_classes) if num_classes > 0 else nn.Identity()
 
         if weight_init != 'skip':
@@ -834,6 +864,10 @@ def init_weights_vit_timm(module: nn.Module, name: str = '') -> None:
         trunc_normal_(module.weight, std=.02)
         if module.bias is not None:
             nn.init.zeros_(module.bias)
+    elif isinstance(module,customLinear):
+        trunc_normal_(module.weights, std=.02)
+        #if module.bias is not None:
+        #    nn.init.zeros_(module.bias)
     elif hasattr(module, 'init_weights'):
         module.init_weights()
 
