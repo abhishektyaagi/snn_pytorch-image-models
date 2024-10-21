@@ -44,7 +44,8 @@ import torch.nn.functional as F
 from torch.utils.checkpoint import checkpoint
 
 from timm.data import IMAGENET_DEFAULT_MEAN, IMAGENET_DEFAULT_STD, IMAGENET_INCEPTION_MEAN, IMAGENET_INCEPTION_STD
-from timm.layers import create_conv2d, create_classifier, get_norm_act_layer, GroupNormAct, LayerType
+from timm.layers import create_conv2d, create_classifier, get_norm_act_layer, LayerType, \
+    GroupNormAct, LayerNormAct2d, EvoNorm2dS0
 from ._builder import build_model_with_cfg, pretrained_cfg_for_features
 from ._efficientnet_blocks import SqueezeExcite
 from ._efficientnet_builder import BlockArgs, EfficientNetBuilder, decode_arch_def, efficientnet_init_weights, \
@@ -488,7 +489,8 @@ def _gen_mnasnet_small(variant, channel_multiplier=1.0, pretrained=False, **kwar
 
 def _gen_mobilenet_v1(
         variant, channel_multiplier=1.0, depth_multiplier=1.0,
-        fix_stem_head=False, head_conv=False, pretrained=False, **kwargs):
+        group_size=None, fix_stem_head=False, head_conv=False, pretrained=False, **kwargs
+):
     """
     Ref impl: https://github.com/tensorflow/models/blob/master/research/slim/nets/mobilenet/mobilenet_v2.py
     Paper: https://arxiv.org/abs/1801.04381
@@ -503,7 +505,12 @@ def _gen_mobilenet_v1(
     round_chs_fn = partial(round_channels, multiplier=channel_multiplier)
     head_features = (1024 if fix_stem_head else max(1024, round_chs_fn(1024))) if head_conv else 0
     model_kwargs = dict(
-        block_args=decode_arch_def(arch_def, depth_multiplier=depth_multiplier, fix_first_last=fix_stem_head),
+        block_args=decode_arch_def(
+            arch_def,
+            depth_multiplier=depth_multiplier,
+            fix_first_last=fix_stem_head,
+            group_size=group_size,
+        ),
         num_features=head_features,
         stem_size=32,
         fix_stem=fix_stem_head,
@@ -517,7 +524,9 @@ def _gen_mobilenet_v1(
 
 
 def _gen_mobilenet_v2(
-        variant, channel_multiplier=1.0, depth_multiplier=1.0, fix_stem_head=False, pretrained=False, **kwargs):
+        variant, channel_multiplier=1.0, depth_multiplier=1.0,
+        group_size=None, fix_stem_head=False, pretrained=False, **kwargs
+):
     """ Generate MobileNet-V2 network
     Ref impl: https://github.com/tensorflow/models/blob/master/research/slim/nets/mobilenet/mobilenet_v2.py
     Paper: https://arxiv.org/abs/1801.04381
@@ -533,7 +542,12 @@ def _gen_mobilenet_v2(
     ]
     round_chs_fn = partial(round_channels, multiplier=channel_multiplier)
     model_kwargs = dict(
-        block_args=decode_arch_def(arch_def, depth_multiplier=depth_multiplier, fix_first_last=fix_stem_head),
+        block_args=decode_arch_def(
+            arch_def,
+            depth_multiplier=depth_multiplier,
+            fix_first_last=fix_stem_head,
+            group_size=group_size,
+        ),
         num_features=1280 if fix_stem_head else max(1280, round_chs_fn(1280)),
         stem_size=32,
         fix_stem=fix_stem_head,
@@ -613,7 +627,8 @@ def _gen_spnasnet(variant, channel_multiplier=1.0, pretrained=False, **kwargs):
 
 def _gen_efficientnet(
         variant, channel_multiplier=1.0, depth_multiplier=1.0, channel_divisor=8,
-        group_size=None, pretrained=False, **kwargs):
+        group_size=None, pretrained=False, **kwargs
+):
     """Creates an EfficientNet model.
 
     Ref impl: https://github.com/tensorflow/tpu/blob/master/models/official/efficientnet/efficientnet_model.py
@@ -661,7 +676,8 @@ def _gen_efficientnet(
 
 
 def _gen_efficientnet_edge(
-        variant, channel_multiplier=1.0, depth_multiplier=1.0, group_size=None, pretrained=False, **kwargs):
+        variant, channel_multiplier=1.0, depth_multiplier=1.0, group_size=None, pretrained=False, **kwargs
+):
     """ Creates an EfficientNet-EdgeTPU model
 
     Ref impl: https://github.com/tensorflow/tpu/tree/master/models/official/efficientnet/edgetpu
@@ -692,7 +708,8 @@ def _gen_efficientnet_edge(
 
 
 def _gen_efficientnet_condconv(
-        variant, channel_multiplier=1.0, depth_multiplier=1.0, experts_multiplier=1, pretrained=False, **kwargs):
+        variant, channel_multiplier=1.0, depth_multiplier=1.0, experts_multiplier=1, pretrained=False, **kwargs
+):
     """Creates an EfficientNet-CondConv model.
 
     Ref impl: https://github.com/tensorflow/tpu/tree/master/models/official/efficientnet/condconv
@@ -764,7 +781,8 @@ def _gen_efficientnet_lite(variant, channel_multiplier=1.0, depth_multiplier=1.0
 
 
 def _gen_efficientnetv2_base(
-        variant, channel_multiplier=1.0, depth_multiplier=1.0, pretrained=False, **kwargs):
+        variant, channel_multiplier=1.0, depth_multiplier=1.0, group_size=None, pretrained=False, **kwargs
+):
     """ Creates an EfficientNet-V2 base model
 
     Ref impl: https://github.com/google/automl/tree/master/efficientnetv2
@@ -780,7 +798,7 @@ def _gen_efficientnetv2_base(
     ]
     round_chs_fn = partial(round_channels, multiplier=channel_multiplier, round_limit=0.)
     model_kwargs = dict(
-        block_args=decode_arch_def(arch_def, depth_multiplier),
+        block_args=decode_arch_def(arch_def, depth_multiplier, group_size=group_size),
         num_features=round_chs_fn(1280),
         stem_size=32,
         round_chs_fn=round_chs_fn,
@@ -793,7 +811,8 @@ def _gen_efficientnetv2_base(
 
 
 def _gen_efficientnetv2_s(
-        variant, channel_multiplier=1.0, depth_multiplier=1.0, group_size=None, rw=False, pretrained=False, **kwargs):
+        variant, channel_multiplier=1.0, depth_multiplier=1.0, group_size=None, rw=False, pretrained=False, **kwargs
+):
     """ Creates an EfficientNet-V2 Small model
 
     Ref impl: https://github.com/google/automl/tree/master/efficientnetv2
@@ -831,7 +850,9 @@ def _gen_efficientnetv2_s(
     return model
 
 
-def _gen_efficientnetv2_m(variant, channel_multiplier=1.0, depth_multiplier=1.0, pretrained=False, **kwargs):
+def _gen_efficientnetv2_m(
+        variant, channel_multiplier=1.0, depth_multiplier=1.0, group_size=None, pretrained=False, **kwargs
+):
     """ Creates an EfficientNet-V2 Medium model
 
     Ref impl: https://github.com/google/automl/tree/master/efficientnetv2
@@ -849,7 +870,7 @@ def _gen_efficientnetv2_m(variant, channel_multiplier=1.0, depth_multiplier=1.0,
     ]
 
     model_kwargs = dict(
-        block_args=decode_arch_def(arch_def, depth_multiplier),
+        block_args=decode_arch_def(arch_def, depth_multiplier, group_size=group_size),
         num_features=1280,
         stem_size=24,
         round_chs_fn=partial(round_channels, multiplier=channel_multiplier),
@@ -861,7 +882,9 @@ def _gen_efficientnetv2_m(variant, channel_multiplier=1.0, depth_multiplier=1.0,
     return model
 
 
-def _gen_efficientnetv2_l(variant, channel_multiplier=1.0, depth_multiplier=1.0, pretrained=False, **kwargs):
+def _gen_efficientnetv2_l(
+        variant, channel_multiplier=1.0, depth_multiplier=1.0, group_size=None, pretrained=False, **kwargs
+):
     """ Creates an EfficientNet-V2 Large model
 
     Ref impl: https://github.com/google/automl/tree/master/efficientnetv2
@@ -879,7 +902,7 @@ def _gen_efficientnetv2_l(variant, channel_multiplier=1.0, depth_multiplier=1.0,
     ]
 
     model_kwargs = dict(
-        block_args=decode_arch_def(arch_def, depth_multiplier),
+        block_args=decode_arch_def(arch_def, depth_multiplier, group_size=group_size),
         num_features=1280,
         stem_size=32,
         round_chs_fn=partial(round_channels, multiplier=channel_multiplier),
@@ -891,7 +914,9 @@ def _gen_efficientnetv2_l(variant, channel_multiplier=1.0, depth_multiplier=1.0,
     return model
 
 
-def _gen_efficientnetv2_xl(variant, channel_multiplier=1.0, depth_multiplier=1.0, pretrained=False, **kwargs):
+def _gen_efficientnetv2_xl(
+        variant, channel_multiplier=1.0, depth_multiplier=1.0, group_size=None, pretrained=False, **kwargs
+):
     """ Creates an EfficientNet-V2 Xtra-Large model
 
     Ref impl: https://github.com/google/automl/tree/master/efficientnetv2
@@ -909,7 +934,7 @@ def _gen_efficientnetv2_xl(variant, channel_multiplier=1.0, depth_multiplier=1.0
     ]
 
     model_kwargs = dict(
-        block_args=decode_arch_def(arch_def, depth_multiplier),
+        block_args=decode_arch_def(arch_def, depth_multiplier, group_size=group_size),
         num_features=1280,
         stem_size=32,
         round_chs_fn=partial(round_channels, multiplier=channel_multiplier),
@@ -923,7 +948,8 @@ def _gen_efficientnetv2_xl(variant, channel_multiplier=1.0, depth_multiplier=1.0
 
 def _gen_efficientnet_x(
         variant, channel_multiplier=1.0, depth_multiplier=1.0, channel_divisor=8,
-        group_size=None, version=1, pretrained=False, **kwargs):
+        group_size=None, version=1, pretrained=False, **kwargs
+):
     """Creates an EfficientNet model.
 
     Ref impl: https://github.com/tensorflow/tpu/blob/master/models/official/efficientnet/efficientnet_model.py
@@ -1069,9 +1095,7 @@ def _gen_mixnet_m(variant, channel_multiplier=1.0, depth_multiplier=1.0, pretrai
     return model
 
 
-def _gen_tinynet(
-    variant, model_width=1.0, depth_multiplier=1.0, pretrained=False, **kwargs
-):
+def _gen_tinynet(variant, model_width=1.0, depth_multiplier=1.0, pretrained=False, **kwargs):
     """Creates a TinyNet model.
     """
     arch_def = [
@@ -1183,8 +1207,7 @@ def _gen_mobilenet_edgetpu(variant, channel_multiplier=1.0, depth_multiplier=1.0
     return model
 
 
-def _gen_test_efficientnet(
-        variant, channel_multiplier=1.0, depth_multiplier=1.0, pretrained=False, **kwargs):
+def _gen_test_efficientnet(variant, channel_multiplier=1.0, depth_multiplier=1.0, pretrained=False, **kwargs):
     """ Minimal test EfficientNet generator.
     """
     arch_def = [
@@ -1248,7 +1271,11 @@ default_cfgs = generate_default_cfgs({
         mean=IMAGENET_INCEPTION_MEAN, std=IMAGENET_INCEPTION_STD,
         test_input_size=(3, 256, 256), test_crop_pct=0.95,
     ),
-    'mobilenetv1_125.untrained': _cfg(),
+    'mobilenetv1_125.ra4_e3600_r224_in1k': _cfg(
+        hf_hub_id='timm/',
+        mean=IMAGENET_INCEPTION_MEAN, std=IMAGENET_INCEPTION_STD,
+        crop_pct=0.9, test_input_size=(3, 256, 256), test_crop_pct=1.0,
+    ),
 
     'mobilenetv2_035.untrained': _cfg(),
     'mobilenetv2_050.lamb_in1k': _cfg(
@@ -1286,8 +1313,12 @@ default_cfgs = generate_default_cfgs({
     'efficientnet_b0.ra4_e3600_r224_in1k': _cfg(
         hf_hub_id='timm/',
         mean=IMAGENET_INCEPTION_MEAN, std=IMAGENET_INCEPTION_STD,
-        crop_pct=0.9, test_input_size=(3, 256, 256), test_crop_pct=1.0
-    ),
+        crop_pct=0.9, test_input_size=(3, 256, 256), test_crop_pct=1.0),
+    'efficientnet_b1.ra4_e3600_r240_in1k': _cfg(
+        hf_hub_id='timm/',
+        mean=IMAGENET_INCEPTION_MEAN, std=IMAGENET_INCEPTION_STD,
+        input_size=(3, 240, 240), crop_pct=0.9, pool_size=(8, 8),
+        test_input_size=(3, 288, 288), test_crop_pct=1.0),
     'efficientnet_b1.ft_in1k': _cfg(
         url='https://github.com/rwightman/pytorch-image-models/releases/download/v0.1-weights/efficientnet_b1-533bc792.pth',
         hf_hub_id='timm/',
@@ -1773,7 +1804,18 @@ default_cfgs = generate_default_cfgs({
 
     "test_efficientnet.r160_in1k": _cfg(
         hf_hub_id='timm/',
-        input_size=(3, 160, 160), pool_size=(5, 5)),
+        input_size=(3, 160, 160), pool_size=(5, 5), crop_pct=0.95),
+    "test_efficientnet_ln.r160_in1k": _cfg(
+        hf_hub_id='timm/',
+        input_size=(3, 160, 160), pool_size=(5, 5), crop_pct=0.95),
+    "test_efficientnet_gn.r160_in1k": _cfg(
+        hf_hub_id='timm/',
+        mean=(0.5, 0.5, 0.5), std=(0.5, 0.5, 0.5),
+        input_size=(3, 160, 160), pool_size=(5, 5), crop_pct=0.95),
+    "test_efficientnet_evos.r160_in1k": _cfg(
+        hf_hub_id='timm/',
+        mean=(0.5, 0.5, 0.5), std=(0.5, 0.5, 0.5),
+        input_size=(3, 160, 160), pool_size=(5, 5), crop_pct=0.95),
 })
 
 
@@ -2759,6 +2801,27 @@ def mobilenet_edgetpu_v2_l(pretrained=False, **kwargs) -> EfficientNet:
 @register_model
 def test_efficientnet(pretrained=False, **kwargs) -> EfficientNet:
     model = _gen_test_efficientnet('test_efficientnet', pretrained=pretrained, **kwargs)
+    return model
+
+
+@register_model
+def test_efficientnet_gn(pretrained=False, **kwargs) -> EfficientNet:
+    model = _gen_test_efficientnet(
+        'test_efficientnet_gn', pretrained=pretrained, norm_layer=partial(GroupNormAct, group_size=8), **kwargs)
+    return model
+
+
+@register_model
+def test_efficientnet_ln(pretrained=False, **kwargs) -> EfficientNet:
+    model = _gen_test_efficientnet(
+        'test_efficientnet_ln', pretrained=pretrained, norm_layer=LayerNormAct2d, **kwargs)
+    return model
+
+
+@register_model
+def test_efficientnet_evos(pretrained=False, **kwargs) -> EfficientNet:
+    model = _gen_test_efficientnet(
+        'test_efficientnet_evos', pretrained=pretrained, norm_layer=partial(EvoNorm2dS0, group_size=8), **kwargs)
     return model
 
 

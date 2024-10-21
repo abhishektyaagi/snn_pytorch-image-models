@@ -26,7 +26,7 @@ except ImportError:
     has_fx_feature_extraction = False
 
 import timm
-from timm import list_models, create_model, set_scriptable, get_pretrained_cfg_value
+from timm import list_models, list_pretrained, create_model, set_scriptable, get_pretrained_cfg_value
 from timm.layers import Format, get_spatial_dim, get_channel_dim
 from timm.models import get_notrace_modules, get_notrace_functions
 
@@ -39,7 +39,8 @@ if torch_backend is not None:
 torch_device = os.environ.get('TORCH_DEVICE', 'cpu')
 timeout = os.environ.get('TIMEOUT')
 timeout120 = int(timeout) if timeout else 120
-timeout300 = int(timeout) if timeout else 300
+timeout240 = int(timeout) if timeout else 240
+timeout360 = int(timeout) if timeout else 360
 
 if hasattr(torch._C, '_jit_set_profiling_executor'):
     # legacy executor is too slow to compile large models for unit tests
@@ -52,14 +53,14 @@ FEAT_INTER_FILTERS = [
     'vision_transformer', 'vision_transformer_sam', 'vision_transformer_hybrid', 'vision_transformer_relpos',
     'beit', 'mvitv2', 'eva', 'cait', 'xcit', 'volo', 'twins', 'deit', 'swin_transformer', 'swin_transformer_v2',
     'swin_transformer_v2_cr', 'maxxvit', 'efficientnet', 'mobilenetv3', 'levit', 'efficientformer', 'resnet',
-    'regnet', 'byobnet', 'byoanet', 'mlp_mixer', 'hiera', 'fastvit',
+    'regnet', 'byobnet', 'byoanet', 'mlp_mixer', 'hiera', 'fastvit', 'hieradet_sam2'
 ]
 
 # transformer / hybrid models don't support full set of spatial / feature APIs and/or have spatial output.
 NON_STD_FILTERS = [
     'vit_*', 'tnt_*', 'pit_*', 'coat_*', 'cait_*', '*mixer_*', 'gmlp_*', 'resmlp_*', 'twins_*',
     'convit_*', 'levit*', 'visformer*', 'deit*', 'xcit_*', 'crossvit_*', 'beit*',
-    'poolformer_*', 'volo_*', 'sequencer2d_*', 'mvitv2*', 'gcvit*', 'efficientformer*',
+    'poolformer_*', 'volo_*', 'sequencer2d_*', 'mvitv2*', 'gcvit*', 'efficientformer*', 'sam_hiera*',
     'eva_*', 'flexivit*', 'eva02*', 'samvit_*', 'efficientvit_m*', 'tiny_vit_*', 'hiera_*', 'vitamin*', 'test_vit*',
 ]
 NUM_NON_STD = len(NON_STD_FILTERS)
@@ -116,6 +117,50 @@ def _get_input_size(model=None, model_name='', target=None):
         if target and max(input_size) > target:
             input_size = tuple([min(x, target) for x in input_size])
     return input_size
+
+
+@pytest.mark.base
+@pytest.mark.timeout(timeout240)
+@pytest.mark.parametrize('model_name', list_pretrained('test_*'))
+@pytest.mark.parametrize('batch_size', [1])
+def test_model_inference(model_name, batch_size):
+    """Run a single forward pass with each model"""
+    from PIL import Image
+    from huggingface_hub import snapshot_download
+    import tempfile
+    import safetensors
+
+    model = create_model(model_name, pretrained=True)
+    model.eval()
+    pp = timm.data.create_transform(**timm.data.resolve_data_config(model=model))
+
+    with tempfile.TemporaryDirectory()  as temp_dir:
+        snapshot_download(
+            repo_id='timm/' + model_name, repo_type='model', local_dir=temp_dir, allow_patterns='test/*'
+        )
+        rand_tensors = safetensors.torch.load_file(os.path.join(temp_dir, 'test', 'rand_tensors.safetensors'))
+        owl_tensors = safetensors.torch.load_file(os.path.join(temp_dir, 'test', 'owl_tensors.safetensors'))
+        test_owl = Image.open(os.path.join(temp_dir, 'test', 'test_owl.jpg'))
+
+    with torch.no_grad():
+        rand_output = model(rand_tensors['input'])
+        rand_features = model.forward_features(rand_tensors['input'])
+        rand_pre_logits = model.forward_head(rand_features, pre_logits=True)
+        assert torch.allclose(rand_output, rand_tensors['output'], rtol=1e-3, atol=1e-4)
+        assert torch.allclose(rand_features, rand_tensors['features'], rtol=1e-3, atol=1e-4)
+        assert torch.allclose(rand_pre_logits, rand_tensors['pre_logits'], rtol=1e-3, atol=1e-4)
+
+        def _test_owl(owl_input):
+            owl_output = model(owl_input)
+            owl_features = model.forward_features(owl_input)
+            owl_pre_logits = model.forward_head(owl_features.clone(), pre_logits=True)
+            assert owl_output.softmax(1).argmax(1) == 24  # owl
+            assert torch.allclose(owl_output, owl_tensors['output'], rtol=1e-3, atol=1e-4)
+            assert torch.allclose(owl_features, owl_tensors['features'], rtol=1e-3, atol=1e-4)
+            assert torch.allclose(owl_pre_logits, owl_tensors['pre_logits'], rtol=1e-3, atol=1e-4)
+
+        _test_owl(owl_tensors['input'])  # test with original pp owl tensor
+        _test_owl(pp(test_owl).unsqueeze(0))  # re-process from original jpg
 
 
 @pytest.mark.base
@@ -182,7 +227,7 @@ EARLY_POOL_MODELS = (
 )
 
 @pytest.mark.cfg
-@pytest.mark.timeout(timeout300)
+@pytest.mark.timeout(timeout360)
 @pytest.mark.parametrize('model_name', list_models(
     exclude_filters=EXCLUDE_FILTERS + NON_STD_FILTERS, include_tags=True))
 @pytest.mark.parametrize('batch_size', [1])
@@ -260,7 +305,7 @@ def test_model_default_cfgs(model_name, batch_size):
 
 
 @pytest.mark.cfg
-@pytest.mark.timeout(timeout300)
+@pytest.mark.timeout(timeout360)
 @pytest.mark.parametrize('model_name', list_models(filter=NON_STD_FILTERS, exclude_filters=NON_STD_EXCLUDE_FILTERS, include_tags=True))
 @pytest.mark.parametrize('batch_size', [1])
 def test_model_default_cfgs_non_std(model_name, batch_size):

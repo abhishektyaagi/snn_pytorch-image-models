@@ -27,6 +27,7 @@ from .ghostnet import *
 from .hardcorenas import *
 from .hgnet import *
 from .hiera import *
+from .hieradet_sam2 import *
 from .hrnet import *
 from .inception_next import *
 from .inception_resnet_v2 import *
@@ -34,6 +35,7 @@ from .inception_v3 import *
 from .inception_v4 import *
 from .levit import *
 from .maxxvit import *
+from .mambaout import *
 from .metaformer import *
 from .mlp_mixer import *
 from .mobilenetv3 import *
@@ -94,4 +96,5 @@ from ._pretrained import PretrainedCfg, DefaultCfg, filter_pretrained_cfg
 from ._prune import adapt_model_from_string
 from ._registry import split_model_name_tag, get_arch_name, generate_default_cfgs, register_model, \
     register_model_deprecations, model_entrypoint, list_models, list_pretrained, get_deprecated_models, \
-    is_model, list_modules, is_model_in_modules, is_model_pretrained, get_pretrained_cfg, get_pretrained_cfg_value
+    is_model, list_modules, is_model_in_modules, is_model_pretrained, get_pretrained_cfg, get_pretrained_cfg_value, \
+    get_arch_pretrained_cfgs

@@ -455,6 +455,7 @@ class VisionTransformer(nn.Module):
             no_embed_class: bool = False,
             reg_tokens: int = 0,
             pre_norm: bool = False,
+            final_norm: bool = True,
             fc_norm: Optional[bool] = None,
             dynamic_img_size: bool = False,
             dynamic_img_pad: bool = False,
@@ -490,7 +491,9 @@ class VisionTransformer(nn.Module):
             class_token: Use class token.
             no_embed_class: Don't include position embeddings for class (or reg) tokens.
             reg_tokens: Number of register tokens.
-            fc_norm: Pre head norm after pool (instead of before), if None, enabled when global_pool == 'avg'.
+            pre_norm: Enable norm after embeddings, before transformer blocks (standard in CLIP ViT).
+            final_norm: Enable norm after transformer blocks, before head (standard in most ViT).
+            fc_norm: Move final norm after pool (instead of before), if None, enabled when global_pool == 'avg'.
             drop_rate: Head dropout rate.
             pos_drop_rate: Position embedding dropout rate.
             attn_drop_rate: Attention dropout rate.
@@ -578,7 +581,7 @@ class VisionTransformer(nn.Module):
             for i in range(depth)])
         self.feature_info = [
             dict(module=f'blocks.{i}', num_chs=embed_dim, reduction=reduction) for i in range(depth)]
-        self.norm = norm_layer(embed_dim) if not use_fc_norm else nn.Identity()
+        self.norm = norm_layer(embed_dim) if final_norm and not use_fc_norm else nn.Identity()
 
         # Classifier Head
         if global_pool == 'map':
@@ -595,7 +598,7 @@ class VisionTransformer(nn.Module):
             )
         else:
             self.attn_pool = None
-        self.fc_norm = norm_layer(embed_dim) if use_fc_norm else nn.Identity()
+        self.fc_norm = norm_layer(embed_dim) if final_norm and use_fc_norm else nn.Identity()
         self.head_drop = nn.Dropout(drop_rate)
         
         self.head = nn.Linear(self.embed_dim, num_classes) if num_classes > 0 else nn.Identity()
@@ -659,7 +662,7 @@ class VisionTransformer(nn.Module):
             assert global_pool in ('', 'avg', 'avgmax', 'max', 'token', 'map')
             if global_pool == 'map' and self.attn_pool is None:
                 assert False, "Cannot currently add attention pooling in reset_classifier()."
-            elif global_pool != 'map ' and self.attn_pool is not None:
+            elif global_pool != 'map' and self.attn_pool is not None:
                 self.attn_pool = None  # remove attention pooling
             self.global_pool = global_pool
         self.head = nn.Linear(self.embed_dim, num_classes) if num_classes > 0 else nn.Identity()
@@ -1851,6 +1854,11 @@ default_cfgs = {
         hf_hub_filename='open_clip_pytorch_model.bin',
         input_size=(3, 256, 256),
         num_classes=0),
+    'vit_base_patch16_siglip_256.webli_i18n': _cfg(
+        hf_hub_id='timm/ViT-B-16-SigLIP-i18n-256',
+        hf_hub_filename='open_clip_pytorch_model.bin',
+        input_size=(3, 256, 256),
+        num_classes=0),
     'vit_base_patch16_siglip_384.webli': _cfg(
         hf_hub_id='timm/ViT-B-16-SigLIP-384',
         hf_hub_filename='open_clip_pytorch_model.bin',
@@ -1875,6 +1883,16 @@ default_cfgs = {
         hf_hub_id='timm/ViT-SO400M-14-SigLIP',
         hf_hub_filename='open_clip_pytorch_model.bin',
         num_classes=0),
+    'vit_so400m_patch16_siglip_256.webli_i18n': _cfg(
+        hf_hub_id='timm/ViT-SO400M-16-SigLIP-i18n-256',
+        hf_hub_filename='open_clip_pytorch_model.bin',
+        input_size=(3, 256, 256),
+        num_classes=0),
+    'vit_so400m_patch14_siglip_378.webli': _cfg(
+        hf_hub_id='timm/ViT-SO400M-14-SigLIP-384',
+        hf_hub_filename='open_clip_pytorch_model.bin',
+        input_size=(3, 378, 378),
+        num_classes=0),
     'vit_so400m_patch14_siglip_384.webli': _cfg(
         hf_hub_id='timm/ViT-SO400M-14-SigLIP-384',
         hf_hub_filename='open_clip_pytorch_model.bin',
@@ -1887,6 +1905,11 @@ default_cfgs = {
         num_classes=0),
     'vit_base_patch16_siglip_gap_256.webli': _cfg(
         hf_hub_id='timm/ViT-B-16-SigLIP-256',
+        hf_hub_filename='open_clip_pytorch_model.bin',
+        input_size=(3, 256, 256),
+        num_classes=0),
+    'vit_base_patch16_siglip_gap_256.webli_i18n': _cfg(
+        hf_hub_id='timm/ViT-B-16-SigLIP-i18n-256',
         hf_hub_filename='open_clip_pytorch_model.bin',
         input_size=(3, 256, 256),
         num_classes=0),
@@ -1924,6 +1947,16 @@ default_cfgs = {
         hf_hub_filename='paligemma-3b-pt-224.npz',
         custom_load='hf',
         num_classes=0),
+    'vit_so400m_patch16_siglip_gap_256.webli_i18n': _cfg(
+        hf_hub_id='timm/ViT-SO400M-16-SigLIP-i18n-256',
+        hf_hub_filename='open_clip_pytorch_model.bin',
+        input_size=(3, 256, 256),
+        num_classes=0),
+    'vit_so400m_patch14_siglip_gap_378.webli': _cfg(
+        hf_hub_id='timm/ViT-SO400M-14-SigLIP-384',
+        hf_hub_filename='open_clip_pytorch_model.bin',
+        input_size=(3, 378, 378), crop_pct=1.0,
+        num_classes=0),
     'vit_so400m_patch14_siglip_gap_384.webli': _cfg(
         hf_hub_id='timm/ViT-SO400M-14-SigLIP-384',
         hf_hub_filename='open_clip_pytorch_model.bin',
@@ -1947,6 +1980,15 @@ default_cfgs = {
         custom_load='hf',
         input_size=(3, 896, 896), crop_pct=1.0,
         num_classes=0),
+
+    'vit_so400m_patch14_siglip_378.webli_ft_in1k': _cfg(
+        hf_hub_id='timm/',
+        input_size=(3, 378, 378), crop_pct=1.0, crop_mode='squash',
+    ),
+    'vit_so400m_patch14_siglip_gap_378.webli_ft_in1k': _cfg(
+        hf_hub_id='timm/',
+        input_size=(3, 378, 378), crop_pct=1.0, crop_mode='squash',
+    ),
 
     'vit_xsmall_patch16_clip_224.tinyclip_yfcc15m': _cfg(
         hf_hub_id='timm/',
@@ -1998,14 +2040,27 @@ default_cfgs = {
         hf_hub_id='timm/',
         num_classes=11821,
         input_size=(3, 256, 256), crop_pct=0.95),
+    'vit_mediumd_patch16_reg4_gap_256.sbb2_e200_in12k_ft_in1k': _cfg(
+        hf_hub_id='timm/',
+        input_size=(3, 256, 256), crop_pct=0.95),
     'vit_mediumd_patch16_reg4_gap_256.sbb_in12k_ft_in1k': _cfg(
         hf_hub_id='timm/',
+        input_size=(3, 256, 256), crop_pct=0.95),
+    'vit_mediumd_patch16_reg4_gap_256.sbb2_e200_in12k': _cfg(
+        hf_hub_id='timm/',
+        num_classes=11821,
         input_size=(3, 256, 256), crop_pct=0.95),
     'vit_mediumd_patch16_reg4_gap_256.sbb_in12k': _cfg(
         hf_hub_id='timm/',
         num_classes=11821,
         input_size=(3, 256, 256), crop_pct=0.95),
+    'vit_mediumd_patch16_reg4_gap_384.sbb2_e200_in12k_ft_in1k': _cfg(
+        hf_hub_id='timm/',
+        input_size=(3, 384, 384), crop_pct=1.0),
     'vit_betwixt_patch16_reg1_gap_256.sbb_in1k': _cfg(
+        hf_hub_id='timm/',
+        input_size=(3, 256, 256), crop_pct=0.95),
+    'vit_betwixt_patch16_reg4_gap_256.sbb2_e200_in12k_ft_in1k': _cfg(
         hf_hub_id='timm/',
         input_size=(3, 256, 256), crop_pct=0.95),
     'vit_betwixt_patch16_reg4_gap_256.sbb_in12k_ft_in1k': _cfg(
@@ -2014,10 +2069,17 @@ default_cfgs = {
     'vit_betwixt_patch16_reg4_gap_256.sbb_in1k': _cfg(
         hf_hub_id='timm/',
         input_size=(3, 256, 256), crop_pct=0.95),
+    'vit_betwixt_patch16_reg4_gap_256.sbb2_e200_in12k': _cfg(
+        hf_hub_id='timm/',
+        num_classes=11821,
+        input_size=(3, 256, 256), crop_pct=0.95),
     'vit_betwixt_patch16_reg4_gap_256.sbb_in12k': _cfg(
         hf_hub_id='timm/',
         num_classes=11821,
         input_size=(3, 256, 256), crop_pct=0.95),
+    'vit_betwixt_patch16_reg4_gap_384.sbb2_e200_in12k_ft_in1k': _cfg(
+        hf_hub_id='timm/',
+        input_size=(3, 384, 384), crop_pct=1.0),
     'vit_base_patch16_reg4_gap_256.untrained': _cfg(
         input_size=(3, 256, 256)),
 
@@ -2026,9 +2088,21 @@ default_cfgs = {
     'vit_so150m_patch16_reg4_map_256.untrained': _cfg(
         input_size=(3, 256, 256)),
 
+    'vit_intern300m_patch14_448.ogvl_dist': _cfg(
+        hf_hub_id='timm/',
+        mean=IMAGENET_DEFAULT_MEAN, std=IMAGENET_DEFAULT_STD,
+        input_size=(3, 448, 448), crop_pct=1.0, num_classes=0,
+    ),
+
     'test_vit.r160_in1k': _cfg(
         hf_hub_id='timm/',
-        input_size=(3, 160, 160), crop_pct=0.875),
+        input_size=(3, 160, 160), crop_pct=0.95),
+    'test_vit2.r160_in1k': _cfg(
+        hf_hub_id='timm/',
+        input_size=(3, 160, 160), crop_pct=0.95),
+    'test_vit3.r160_in1k': _cfg(
+        hf_hub_id='timm/',
+        input_size=(3, 160, 160), crop_pct=0.95),
 }
 
 _quick_gelu_cfgs = [
@@ -2060,7 +2134,7 @@ def _create_vision_transformer(variant: str, pretrained: bool = False, **kwargs)
         _filter_fn = checkpoint_filter_fn
 
     # FIXME attn pool (currently only in siglip) params removed if pool disabled, is there a better soln?
-    strict = True
+    strict = kwargs.pop('pretrained_strict', True)
     if 'siglip' in variant and kwargs.get('global_pool', None) != 'map':
         strict = False
 
@@ -2944,6 +3018,28 @@ def vit_so400m_patch14_siglip_224(pretrained: bool = False, **kwargs) -> VisionT
 
 
 @register_model
+def vit_so400m_patch16_siglip_256(pretrained: bool = False, **kwargs) -> VisionTransformer:
+    # this is a corrected variant of the 384 with a res properly divisible by patch size (no padding/truncation)
+    model_args = dict(
+        patch_size=16, embed_dim=1152, depth=27, num_heads=16, mlp_ratio=3.7362, class_token=False, global_pool='map',
+    )
+    model = _create_vision_transformer(
+        'vit_so400m_patch16_siglip_256', pretrained=pretrained, **dict(model_args, **kwargs))
+    return model
+
+
+@register_model
+def vit_so400m_patch14_siglip_378(pretrained: bool = False, **kwargs) -> VisionTransformer:
+    # this is a corrected variant of the 384 with a res properly divisible by patch size (no padding/truncation)
+    model_args = dict(
+        patch_size=14, embed_dim=1152, depth=27, num_heads=16, mlp_ratio=3.7362, class_token=False, global_pool='map',
+    )
+    model = _create_vision_transformer(
+        'vit_so400m_patch14_siglip_378', pretrained=pretrained, **dict(model_args, **kwargs))
+    return model
+
+
+@register_model
 def vit_so400m_patch14_siglip_384(pretrained: bool = False, **kwargs) -> VisionTransformer:
     model_args = dict(
         patch_size=14, embed_dim=1152, depth=27, num_heads=16, mlp_ratio=3.7362, class_token=False, global_pool='map',
@@ -3028,6 +3124,30 @@ def vit_so400m_patch14_siglip_gap_224(pretrained: bool = False, **kwargs) -> Vis
     )
     model = _create_vision_transformer(
         'vit_so400m_patch14_siglip_gap_224', pretrained=pretrained, **dict(model_args, **kwargs))
+    return model
+
+
+@register_model
+def vit_so400m_patch16_siglip_gap_256(pretrained: bool = False, **kwargs) -> VisionTransformer:
+    """ A SigLIP variant of ViT with global average pooling (GAP) instead of attention pooling (MAP)."""
+    model_args = dict(
+        patch_size=16, embed_dim=1152, depth=27, num_heads=16, mlp_ratio=3.7362,
+        class_token=False, global_pool='avg', fc_norm=False,
+    )
+    model = _create_vision_transformer(
+        'vit_so400m_patch16_siglip_gap_256', pretrained=pretrained, **dict(model_args, **kwargs))
+    return model
+
+
+@register_model
+def vit_so400m_patch14_siglip_gap_378(pretrained: bool = False, **kwargs) -> VisionTransformer:
+    """ A SigLIP variant of ViT with global average pooling (GAP) instead of attention pooling (MAP)."""
+    model_args = dict(
+        patch_size=14, embed_dim=1152, depth=27, num_heads=16, mlp_ratio=3.7362,
+        class_token=False, global_pool='avg', fc_norm=False,
+    )
+    model = _create_vision_transformer(
+        'vit_so400m_patch14_siglip_gap_378', pretrained=pretrained, **dict(model_args, **kwargs))
     return model
 
 
@@ -3145,6 +3265,17 @@ def vit_mediumd_patch16_reg4_gap_256(pretrained: bool = False, **kwargs) -> Visi
 
 
 @register_model
+def vit_mediumd_patch16_reg4_gap_384(pretrained: bool = False, **kwargs) -> VisionTransformer:
+    model_args = dict(
+        patch_size=16, embed_dim=512, depth=20, num_heads=8, init_values=1e-5,
+        class_token=False, no_embed_class=True, reg_tokens=4, global_pool='avg',
+    )
+    model = _create_vision_transformer(
+        'vit_mediumd_patch16_reg4_gap_384', pretrained=pretrained, **dict(model_args, **kwargs))
+    return model
+
+
+@register_model
 def vit_betwixt_patch16_reg1_gap_256(pretrained: bool = False, **kwargs) -> VisionTransformer:
     model_args = dict(
         patch_size=16, embed_dim=640, depth=12, num_heads=10, init_values=1e-5,
@@ -3163,6 +3294,17 @@ def vit_betwixt_patch16_reg4_gap_256(pretrained: bool = False, **kwargs) -> Visi
     )
     model = _create_vision_transformer(
         'vit_betwixt_patch16_reg4_gap_256', pretrained=pretrained, **dict(model_args, **kwargs))
+    return model
+
+
+@register_model
+def vit_betwixt_patch16_reg4_gap_384(pretrained: bool = False, **kwargs) -> VisionTransformer:
+    model_args = dict(
+        patch_size=16, embed_dim=640, depth=12, num_heads=10, init_values=1e-5,
+        class_token=False, no_embed_class=True, reg_tokens=4, global_pool='avg',
+    )
+    model = _create_vision_transformer(
+        'vit_betwixt_patch16_reg4_gap_384', pretrained=pretrained, **dict(model_args, **kwargs))
     return model
 
 
@@ -3200,11 +3342,44 @@ def vit_so150m_patch16_reg4_gap_256(pretrained: bool = False, **kwargs) -> Visio
 
 
 @register_model
+def vit_intern300m_patch14_448(pretrained: bool = False, **kwargs) -> VisionTransformer:
+    model_args = dict(
+        patch_size=14, embed_dim=1024, depth=24, num_heads=16,
+        init_values=0.1, final_norm=False, dynamic_img_size=True,
+    )
+    model = _create_vision_transformer(
+        'vit_intern300m_patch14_448', pretrained=pretrained, **dict(model_args, **kwargs))
+    return model
+
+
+@register_model
 def test_vit(pretrained: bool = False, **kwargs) -> VisionTransformer:
     """ ViT Test
     """
-    model_args = dict(patch_size=16, embed_dim=64, depth=6, num_heads=2, mlp_ratio=3)
+    model_args = dict(patch_size=16, embed_dim=64, depth=6, num_heads=2, mlp_ratio=3, dynamic_img_size=True)
     model = _create_vision_transformer('test_vit', pretrained=pretrained, **dict(model_args, **kwargs))
+    return model
+
+
+@register_model
+def test_vit2(pretrained: bool = False, **kwargs) -> VisionTransformer:
+    """ ViT Test
+    """
+    model_args = dict(
+        patch_size=16, embed_dim=64, depth=8, num_heads=2, mlp_ratio=3,
+        class_token=False, reg_tokens=1, global_pool='avg', init_values=1e-5, dynamic_img_size=True)
+    model = _create_vision_transformer('test_vit2', pretrained=pretrained, **dict(model_args, **kwargs))
+    return model
+
+
+@register_model
+def test_vit3(pretrained: bool = False, **kwargs) -> VisionTransformer:
+    """ ViT Test
+    """
+    model_args = dict(
+        patch_size=16, embed_dim=96, depth=9, num_heads=3, mlp_ratio=2,
+        class_token=False, reg_tokens=1, global_pool='map', init_values=1e-5)
+    model = _create_vision_transformer('test_vit3', pretrained=pretrained, **dict(model_args, **kwargs))
     return model
 
 
