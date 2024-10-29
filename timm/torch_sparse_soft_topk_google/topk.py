@@ -106,17 +106,17 @@ def isotonic_dykstra_mask(s, num_iter=500, device='cuda'):
     return sol if n % 2 != 0 else sol[:-1]
 
 def sparse_soft_topk_mask_dykstra(x, k, l=1e-1, num_iter=500, device='cuda'):
-    print(x)
+    #print(x)
     n = x.shape[0]
     perm = torch.argsort(-x)
     P = F.one_hot(perm, n).float().to(device)
-    print(P)
+    #print(P)
     s = P @ x
-    print(s)
+    #print(s)
     s_w = s - l * torch.cat([torch.ones(k, device=device), torch.zeros(n - k, device=device)])
-    print(s_w)
+    #print(s_w)
     out_dykstra = isotonic_dykstra_mask(s_w, num_iter=num_iter, device=device)
-    print(out_dykstra)
+    #print(out_dykstra)
     out = (s - out_dykstra) / l
-    print(s-out_dykstra)
+    #print(s-out_dykstra)
     return P.T @ out
